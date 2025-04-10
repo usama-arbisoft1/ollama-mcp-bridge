@@ -1,0 +1,12 @@
+{
+  "mcpServers": [
+    {
+      "name": "filesystem",
+      "allowedDirectory": "/Users/usama.jalal/ollama-mcp-bridge/workspace"
+    }
+  ],
+  "llm": {
+    "model": "qwen2.5:3b",
+    "baseUrl": "http://localhost:11434"
+  }
+}
