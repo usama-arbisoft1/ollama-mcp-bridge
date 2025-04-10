@@ -1,16 +1,26 @@
 import { spawn, ChildProcess } from "child_process";
 import { MCPServerConfig } from "./types";
+import { join } from "path";
 
 export class MCPManager {
   private processes: Map<string, ChildProcess> = new Map();
 
   startServers(servers: MCPServerConfig[]) {
     for (const server of servers) {
-      const args = [`@modelcontextprotocol/server-${server.name}`];
-      const directory = server.allowedDirectory || "./";
-      args.push(directory);
+      let proc: ChildProcess;
 
-      const proc = spawn("npx", args, { stdio: "pipe" });
+      if (server.name === "filesystem") {
+        // Use custom simple-filesystem.js for filesystem server
+        const scriptPath = join(__dirname, "../simple-filesystem.js");
+        proc = spawn("node", [scriptPath], { stdio: "pipe" });
+      } else {
+        // Fallback for other servers (can expand this later)
+        console.warn(
+          `No implementation for server: ${server.name}. Skipping or using default behavior.`
+        );
+        continue; // Skip unsupported servers for now
+      }
+
       this.processes.set(server.name, proc);
 
       proc.stdout?.on("data", (data) => console.log(`${server.name}: ${data}`));
@@ -42,11 +52,13 @@ export class MCPManager {
       proc.stdin.write(request + "\n");
       console.log(`${serverName}: Command sent`);
 
-      proc.stdout.once("data", (data) => {
-        console.log(`${serverName} raw response:`, data.toString());
+      const onData = (data: Buffer) => {
+        const responseStr = data.toString().trim();
+        console.log(`${serverName} raw response:`, responseStr);
         try {
-          const response = JSON.parse(data.toString());
+          const response = JSON.parse(responseStr);
           console.log(`${serverName} parsed response:`, response);
+          proc.stdout?.off("data", onData);
           resolve(response.result || response);
         } catch (e) {
           reject(
@@ -57,15 +69,19 @@ export class MCPManager {
             )
           );
         }
-      });
+      };
 
-      proc.stderr?.once("data", (data) => {
+      proc.stdout.on("data", onData);
+
+      proc.stderr?.on("data", (data) => {
         console.error(`${serverName} error:`, data.toString());
         reject(new Error(`${serverName} error: ${data.toString()}`));
       });
 
-      // Timeout after 5 seconds to avoid hanging
-      setTimeout(() => reject(new Error(`${serverName} timed out`)), 5000);
+      setTimeout(() => {
+        proc.stdout?.off("data", onData);
+        reject(new Error(`${serverName} timed out`));
+      }, 5000);
     });
   }
 }
