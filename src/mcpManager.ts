@@ -1,43 +1,40 @@
-import { spawn, ChildProcess } from "child_process";
-import { MCPServerConfig } from "./types";
-import { join } from "path";
+import { spawn, ChildProcess } from 'child_process';
+import { MCPServerConfig } from './types';
+import { join } from 'path';
 
 export class MCPManager {
   private processes: Map<string, ChildProcess> = new Map();
 
   startServers(servers: MCPServerConfig[]) {
     for (const server of servers) {
+      const { name, command = 'npx', args = [], allowedDirectory } = server;
       let proc: ChildProcess;
 
-      if (server.name === "filesystem") {
-        // Use custom simple-filesystem.js for filesystem server
-        const scriptPath = join(__dirname, "../simple-filesystem.js");
-        proc = spawn("node", [scriptPath], { stdio: "pipe" });
-      } else {
-        // Fallback for other servers (can expand this later)
-        console.warn(
-          `No implementation for server: ${server.name}. Skipping or using default behavior.`
-        );
-        continue; // Skip unsupported servers for now
+      // Handle backward compatibility
+      const effectiveArgs = args.length > 0 
+        ? args 
+        : [`@modelcontextprotocol/server-${name}`, allowedDirectory || './'];
+
+      try {
+        console.log(`Starting ${name} with command: ${command} ${effectiveArgs.join(' ')}`);
+        proc = spawn(command, effectiveArgs, { stdio: 'pipe', shell: true });
+      } catch (e) {
+        console.error(`Failed to start ${name}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        // Fallback to custom script if exists
+        const customScript = join(__dirname, `../simple-${name}.js`);
+        console.log(`Trying fallback: node ${customScript} ${allowedDirectory || './'}`);
+        proc = spawn('node', [customScript, allowedDirectory || './'], { stdio: 'pipe' });
       }
 
-      this.processes.set(server.name, proc);
+      this.processes.set(name, proc);
 
-      proc.stdout?.on("data", (data) => console.log(`${server.name}: ${data}`));
-      proc.stderr?.on("data", (data) =>
-        console.error(`${server.name}: ${data}`)
-      );
-      proc.on("close", (code) =>
-        console.log(`${server.name} exited with code ${code}`)
-      );
+      proc.stdout?.on('data', (data) => console.log(`${name}: ${data}`));
+      proc.stderr?.on('data', (data) => console.error(`${name}: ${data}`));
+      proc.on('close', (code) => console.log(`${name} exited with code ${code}`));
     }
   }
 
-  async callTool(
-    serverName: string,
-    toolName: string,
-    args: any
-  ): Promise<any> {
+  async callTool(serverName: string, toolName: string, args: any): Promise<any> {
     const proc = this.processes.get(serverName);
     if (!proc) throw new Error(`Server ${serverName} not running`);
 
@@ -49,7 +46,7 @@ export class MCPManager {
         return reject(new Error(`${serverName} process has no stdin/stdout`));
       }
 
-      proc.stdin.write(request + "\n");
+      proc.stdin.write(request + '\n');
       console.log(`${serverName}: Command sent`);
 
       const onData = (data: Buffer) => {
@@ -58,28 +55,20 @@ export class MCPManager {
         try {
           const response = JSON.parse(responseStr);
           console.log(`${serverName} parsed response:`, response);
-          proc.stdout?.off("data", onData);
+          proc.stdout!.off('data', onData);
           resolve(response.result || response);
         } catch (e) {
-          reject(
-            new Error(
-              `Failed to parse ${serverName} response: ${
-                e instanceof Error ? e.message : String(e)
-              }`
-            )
-          );
+          reject(new Error(`Failed to parse ${serverName} response: ${e instanceof Error ? e.message : 'Unknown error'}`));
         }
       };
 
-      proc.stdout.on("data", onData);
+      proc.stdout.on('data', onData);
 
-      proc.stderr?.on("data", (data) => {
-        console.error(`${serverName} error:`, data.toString());
-        reject(new Error(`${serverName} error: ${data.toString()}`));
-      });
+      proc.stderr?.on('data', (data) => console.error(`${serverName}: ${data}`));
+      proc.on('error', (err) => reject(err));
 
       setTimeout(() => {
-        proc.stdout?.off("data", onData);
+        proc.stdout!.off('data', onData);
         reject(new Error(`${serverName} timed out`));
       }, 5000);
     });
